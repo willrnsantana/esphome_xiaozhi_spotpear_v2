@@ -105,13 +105,15 @@ esphome:
 esp32:
   board: esp32-s3-devkitc-1
   flash_size: 16MB
-  cpu_frequency: 240MHz
+  cpu_frequency: 240MHz  
   framework:
     type: esp-idf
     sdkconfig_options:
       CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+    advanced:
+      ringbuf_in_iram: true
 
 psram:
   mode: octal
@@ -123,6 +125,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
 
 wifi:
   ssid: !secret wifi_ssid
@@ -265,7 +268,7 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO${i2s_din_pin}          # Data In (from codec ADC → ESP mic)
   i2s_dout_pin: GPIO${i2s_dout_pin}        # Data Out (from ESP → codec DAC speaker)
   sample_rate: 16000
-  aec_id: aec_component                    # Optional: link to esp_aec
+  #aec_id: aec_component                    # Optional: link to esp_aec
 
 audio_dac:
   - platform: es8311
@@ -303,6 +306,8 @@ media_player:
   - platform: speaker
     name: None
     id: external_media_player
+    volume_initial: 70%
+    buffer_size: 4000000
     media_pipeline:
       speaker: media_spk_resampling_input
       num_channels: 1
@@ -313,6 +318,15 @@ media_player:
       format: FLAC
       sample_rate: 16000
       num_channels: 1  # S3 Box only has one output channel
+    on_idle:
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - microphone.capture:
+            - micro_wake_word.start:
+            - switch.turn_on: speaker_enable_switch
 
 api:
 
@@ -340,12 +354,13 @@ micro_wake_word:
               # Start the voice assistant
                 - voice_assistant.start:
                     wake_word: !lambda return wake_word;
-                    silence_detection: true
+
 
 voice_assistant:
   id: va
   microphone: i2s_mics
   media_player: external_media_player
+  #speaker: announcement_spk_resampling_input
   micro_wake_word: mww
   #noise_suppression_level: 2
   use_wake_word: false
@@ -361,6 +376,10 @@ voice_assistant:
         id: media_spk_mixer_input
         decibel_reduction: 20  # Number of dB quieter; higher implies more quiet, 0 implies full volume
         duration: 0.0s
+  on_tts_end: 
+    then:
+      - speaker.finish:
+          id: announcement_spk_resampling_input
   on_end:
     - wait_until:
         not:
@@ -370,6 +389,12 @@ voice_assistant:
         id: media_spk_mixer_input
         decibel_reduction: 0
         duration: 1.0s
+    - microphone.capture: 
+    - micro_wake_word.start: 
+  on_idle:
+    - logger.log: "VA ficou idle mesmo"
+    - micro_wake_word.start:
+      
 
 spi:
   - id: spi_bus
@@ -390,3 +415,12 @@ display:
     dimensions:
         height: ${imageheight}
         width: ${imagewidth}
+
+switch:
+  - platform: gpio
+    id: speaker_enable_switch
+    name: Speaker Enable
+    icon: "mdi:speaker"
+    entity_category: config
+    pin: GPIO${speaker_enable_pin}
+    restore_mode: RESTORE_DEFAULT_ON
